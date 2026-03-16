@@ -1,0 +1,825 @@
+---
+title: "RNA Differential Expression Analysis - Blood RNA from Humans"
+author: "Uzochukwu Gospel Ukachukwu"
+date: "2026-03-15"
+output: html_document
+---
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+#### Start ####
+#Set Directory for your RNA analysis
+```{r}
+
+setwd("C:\\Users\\Documents\\RNA Analysis\\DESeq2_analysis")
+getwd()
+
+```
+
+#load libraries
+```{r}
+
+if (!require("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+BiocManager::install("DESeq2")
+BiocManager::install("edgeR")
+BiocManager::install("qvalue")
+BiocManager::install("clusterProfiler")
+BiocManager::install("EnhancedVolcano")
+
+library(DESeq2)
+library(tidyverse)
+library(EnhancedVolcano)
+
+```
+
+# Step 1: prepare/import count data
+```{r}
+
+rna_count <- read.csv("C:\\Users\\Documents\\RNA Analysis\\DESeq2_analysis\\rna_count.csv",
+                      header = TRUE,  stringsAsFactors = FALSE, row.names = 1)
+
+rna_count <- data.frame(sapply(rna_count, as.numeric), row.names = rownames(rna_count))
+rna_count
+str_detect(rna_count,"1")
+
+head(rna_count)
+str(rna_count)
+dim(rna_count)
+
+#If you imported count table without rownames, alternatively you can convert first column of count table to rownames as below;
+
+#rna_count <- rna_count %>% remove_rownames %>% column_to_rownames(var="Sample_ID")
+
+```
+
+#Prepare/import coldata
+```{r}
+
+rna_coldata <-read.csv("C:\\Users\\Documents\\RNA Analysis\\DESeq2_analysis\\rna_coldata.csv",
+                       header = TRUE, stringsAsFactors = FALSE, row.names = 1)
+head(rna_coldata)
+dim(rna_coldata)
+
+#If you imported metadata table without rownames, alternatively you can convert first column of metadata table to rownames as below;
+
+#rna_coldata <- rna_coldata %>% remove_rownames %>% column_to_rownames(var="Sample_ID")
+```
+
+# Set factor levels for rna_coldata
+```{r}
+
+rna_coldata <- rna_coldata[,c("Group", "Batch")]
+rna_coldata$Group <- factor(rna_coldata$Group)
+rna_coldata$Batch <- factor(rna_coldata$Batch)
+
+```
+
+# make sure rna_count matches rna_col_data, and are all in same order
+```{r}
+
+all(colnames(rna_count) %in% rownames(rna_coldata))
+
+#make sure they are in same order
+all(colnames(rna_count) == rownames(rna_coldata))
+dim(rna_count)
+
+```
+
+# Step 2: Create a table of the sum of counts; will be used to  make a Count-matrix plot
+```{r}
+res.dir <- "Results"
+plot.dir <- file.path(res.dir)
+dir.create(plot.dir, recursive = T) #create directory 
+
+rna_count_sum <- colSums(rna_count, na.rm = TRUE)
+rna_count_sum_df <- as.data.frame(rna_count_sum) #convert to dataframe
+rna_count_sum_df<- rna_count_sum_df %>% 
+                      rename(Count= rna_count_sum)   #Rename column
+
+rna_count_sum_df <- cbind(rna_count_sum_df, rna_coldata[1]) #Add "Groups" column from rna_coldata.
+
+rna_count_sum_df<- rna_count_sum_df %>% 
+                      rename(Groups = Group) #Rename column
+
+colnames(rna_count_sum_df)        #inspect the colnames   
+
+#write.table(rna_count_sum_df, file = "Results/rna_count_sum.csv", row.names = TRUE, sep = ",")
+
+```
+
+# To Plot a Count Matrix, use rna_count_sum table
+```{r}
+
+count_sum <- rna_count_sum_df   #reassign to count_sum dataframe 
+
+res.dir <- "Plots"
+plot.dir <- file.path(res.dir, "RNA Count Matrix")
+dir.create(plot.dir, recursive = T)
+
+#make a scatter plot
+ggplot(count_sum,aes(x = Groups, y= Count, fill = Groups, color = Groups))+
+  geom_point(size = 2)+
+  geom_text(aes(label = rownames(count_sum)), vjust = 0.5, size = 2) +
+  labs(title = "RNA Count Matrix") +
+  theme(plot.title = element_text(hjust = 0.5, size = 14))
+
+#save to path
+ggsave(file.path(plot.dir, "Count Matrix_point.svg"), width = 6, height = 4, dpi = 300)
+
+#make a box plot 
+ggplot(count_sum,aes(x=Groups, y=Count, fill = Groups))+
+  geom_boxplot()+
+  labs(title = "RNA Count Matrix")+
+  theme(plot.title = element_text(hjust = 0.5, size = 14))
+
+#save to path
+ggsave(file.path(plot.dir, "Count Matrix_boxplot.svg"), width = 6, height = 4, dpi = 300)
+
+```
+
+#This code is optional (only for inspection purposes)
+```{r}
+#Create row sum table
+rna_count_row_sum <- rowSums(rna_count)
+rna_count_row_sum_df <- as.data.frame(rna_count_row_sum)
+
+write.table(rna_count_row_sum_df, file = "Results/rna_count_row_sum.csv", 
+            row.names = TRUE, sep = ",")
+
+mean(rna_count_row_sum_df$rna_count_row_sum, na.rm = TRUE) #check mean of row sums
+median(rna_count_row_sum_df$rna_count_row_sum, na.rm = TRUE) #check median of row sums
+
+```
+
+#Step 3: Construct a DESeqdataset object
+## Check if there are any NAs in the count table
+```{r}
+#sum up NAs
+sum(is.na(rna_count)) 
+
+# This is optional; you may replace NA with zero if very few
+if (any(is.na(rna_count))) {
+  rna_count[is.na(rna_count)] <- 0
+}
+
+head(rna_count)
+
+#Construct the ddseq object
+ddseq <- DESeqDataSetFromMatrix(countData = rna_count, colData = rna_coldata,
+                                design = ~ Group + Batch, ignoreRank = FALSE)
+assay_ddseq <- ddseq %>% 
+              assay(.)        #Optional(just for inspection)
+head(assay_ddseq) 
+
+```
+
+# Remove rows with low gene counts and keep filtered genes
+```{r}
+
+keep <- rowSums(counts(ddseq) > 11) >= 10   # >11 in ≥10 samples (half of min group size)
+ddseq1 <- ddseq[keep,]
+
+assay_ddseq1 <- ddseq1 %>% 
+                assay(.)
+str(assay_ddseq)
+
+#write.table(assay_ddseq, file = "Results/assay_ddseq.csv", row.names = TRUE,col.names = TRUE, sep = ",")
+    
+```
+
+# Set a factor level
+```{r}
+
+ddseq1$Group <- relevel(ddseq1$Group, ref = "HP_negative")
+ddseq1$Group
+
+```
+#NOTE: You should collapse the technical replicates if you have any. 
+#Never collapse biological replicates
+
+# Step 4: Run Create DESeq (Note: default p_value = 0.1 )
+```{r}
+
+ddseq2 <- DESeq(ddseq1, test ='Wald', sfType = 'poscount')
+assay_ddseq2 <- assay(ddseq2)
+dim(assay_ddseq2)
+
+```
+
+# Step 5: Compare "Patients vs HP_negative" and make histogarm of p-values
+```{r}
+# Contrast btwn Patients vs HP-negative control
+resPt_N <- results(ddseq2, contrast = c("Group","Patients","HP_negative"),  alpha = 0.1)
+summary(resPt_N)
+#na.omit(resPt_N$padj) #remove rows containing NA
+
+resPt_N0.1 <- resPt_N[which(resPt_N$padj < 0.1),]
+summary(resPt_N0.1)
+
+resPt_N0.05 <- resPt_N[which(resPt_N$padj < 0.05),]
+summary(resPt_N0.05)
+
+resPt_N0.01 <- resPt_N[which(resPt_N$padj < 0.01),]        
+summary(resPt_N0.01)
+
+#convert results(according to alpha) to a dataframe
+resPt_N0.1 <- as.data.frame (resPt_N0.1) #Print dataframe
+resPt_N0.1
+
+resPt_N0.05 <- as.data.frame(resPt_N0.05) #Print dataframe
+resPt_N0.05
+
+resPt_N0.01 <- as.data.frame(resPt_N0.01) #Print dataframe
+resPt_N0.01
+
+#Convert row names to column
+resPt_N0.1$Genes <- rownames(resPt_N0.1)
+resPt_N0.1 <- resPt_N0.1 %>%
+              arrange(padj)
+
+resPt_N0.05$Genes <- rownames(resPt_N0.05)
+resPt_N0.05 <- resPt_N0.05 %>%
+arrange(padj)
+
+resPt_N0.01$Genes <- rownames(resPt_N0.01)
+resPt_N0.01 <- resPt_N0.01 %>%
+arrange(padj)
+
+#Create directory to save Histogram
+res.dir <- "Plots"
+plot.dir <- file.path(res.dir, "Histogram", "Pt_N")
+dir.create(plot.dir, recursive = T)
+
+#Check the p-value histogram distribution
+ggplot(resPt_N,aes(x=pvalue)) +
+geom_histogram(color = "brown", fill="white", binwidth=0.01)+
+  labs(title = "Histogram of P-value Distribution") +
+  theme(plot.title = element_text(hjust = 0.5, size = 14))
+
+ggsave(file.path(plot.dir, "Pt_N Pvalue distribution.tiff"), width = 8, height = 5, dpi = 600)
+
+```
+
+##Step 5.1: Explore results for "Patients vs HP_negative"
+```{r}
+
+#Create directory to save MA plots
+res.dir <- "Plots"
+plot.dir <- file.path(res.dir, "MA Plots", "Pt_N")
+dir.create(plot.dir, recursive = T)
+
+library(ggpubr)
+
+#at padj 0.05
+p0.05 <- ggmaplot(resPt_N0.1, main = expression("Patients vs HP_negative"),
+         fdr = 0.05,fc =1, size = 0.5,
+         palette = c("darkred", "blue", "darkgray"),
+         genenames = as.vector(resPt_N0.1$Genes),
+         legend = "top", top = 20,
+         font.label = c("bold", 9),
+         font.legend = "bold",
+         font.main = "bold",
+         select.top.method = c("fc"),
+         ggtheme = ggplot2::theme_minimal()
+         )
+
+p0.05 + geom_hline(yintercept = c(1, -1), linetype = "dashed", color = "darkgray")
+ggsave(file.path(plot.dir, "Deg_Pt_N0.05_maplot.svg"), width = 8, height = 5, dpi = 600)
+
+#at padj 0.01
+p0.01 <- ggmaplot(resPt_N0.1, main = expression("Patients vs HP_negative"),
+         fdr = 0.01, fc= 1, size = 0.5,
+         palette = c("darkred", "blue", "darkgray"),
+         genenames = as.vector(resPt_N0.1$Genes),
+         legend = "top", top = 20,
+         font.label = c("bold", 9),
+         font.legend = "bold",
+         font.main = "bold",
+         select.top.method = c("fc"),
+         ggtheme = ggplot2::theme_minimal()
+)
+p0.01 + geom_hline(yintercept = c(1, -1), linetype = "dashed", color = "darkgray")
+ggsave(file.path(plot.dir, "Deg_Pt_N0.01_maplot.tiff"), width = 8, height = 5, dpi = 600)
+
+
+   
+#Extract differentially expressed genes with padj < 0.05 and Log2FC <= -0.5 / >=0.5
+deg_0.05Pt_N_fc_0.5 <- subset(resPt_N0.1, padj<0.05 & abs(log2FoldChange) >=0.5) %>%
+  arrange(desc(log2FoldChange))
+write.table(deg_0.05Pt_N_fc_0.5, file = "Results/Pt_N/gdegPt_N_0.05_fc_0.5.csv", row.names = FALSE,col.names = TRUE, sep = ",")
+
+#Extract differentially expressed genes with padj < 0.05 and Log2FC <= -1 / >=1
+   deg_0.05Pt_N <- subset(resPt_N0.1, padj<0.05 & abs(log2FoldChange) >=1) %>%
+     arrange(desc(log2FoldChange))
+   write.table(deg_0.05Pt_N, file = "Results/Pt_N/gdegPt_N_0.05.csv", row.names = FALSE,col.names = TRUE, sep = ",")
+   
+#Extract differentially expressed genes with padj < 0.01 and Log2FC <= -1 / >=1
+   deg_0.01Pt_N <- subset(resPt_N0.1, padj<0.01 & abs(log2FoldChange) >=1)%>%
+     arrange(desc(log2FoldChange))
+   write.table(deg_0.01Pt_N, file = "Results/Pt_N/gdegPt_N_0.01.csv", row.names = FALSE, col.names = TRUE, sep = ",")
+
+#Extract differentially expressed genes with padj < 0.01 and Log2FC <= -0.5 / >=0.5
+   deg_0.01Pt_N_fc_0.5 <- subset(resPt_N0.1, padj<0.01 & abs(log2FoldChange) >=0.5) %>%
+     arrange(desc(log2FoldChange))
+   write.table(deg_0.01Pt_N_fc_0.5, file = "Results/Pt_N/gdegPt_N_0.01_fc_0.5.csv", row.names = FALSE,col.names = TRUE, sep = ",")
+
+#Extract differentially expressed genes with padj < 0.005 and Log2FC <= -1 / >=1
+   deg_0.005Pt_N <- subset(resPt_N0.1, padj<0.005 & abs(log2FoldChange) >=1)%>%
+     arrange(desc(log2FoldChange))
+   write.table(deg_0.005Pt_N, file = "Results/Pt_N/gdegPt_N_0.005.csv", row.names = FALSE, col.names = TRUE, sep = ",")   
+   
+```
+
+# Step 6: Compare "HP_positive vs HP_negative" and make histogarm of p-values
+```{r}
+
+#contrasts btwn "HP_positive vs HP_negative"
+resP_N <- results(ddseq2, contrast = c("Group", "HP_positive", "HP_negative"), alpha = 0.1)
+summary(resP_N)
+
+resP_N0.1 <- resP_N[which(resP_N$padj < 0.1),]
+summary(resP_N0.1)
+
+resP_N0.05 <- resP_N[which(resP_N$padj < 0.05),]
+summary(resP_N0.05)
+
+resP_N0.01 <- resP_N[which(resP_N$padj < 0.01),]        
+summary(resP_N0.01)
+
+#convert results(according to alpha) to a dataframe
+resP_N0.1 <- as.data.frame (resP_N0.1) #Print dataframe
+resP_N0.1
+
+resP_N0.05 <- as.data.frame(resP_N0.05) #Print dataframe
+resP_N0.05
+
+resP_N0.01 <- as.data.frame(resP_N0.01) #Print dataframe
+resP_N0.01
+
+#Convert row names to column
+resP_N0.1$Genes <- rownames(resP_N0.1)
+#resP_N0.1<- na.omit(resP_N0.1)
+resP_N0.1 <- resP_N0.1 %>%
+  #filter(padj < 0.1) %>%
+  arrange(padj)
+
+resP_N0.05$Genes <- rownames(resP_N0.05)
+resP_N0.05 <- resP_N0.05 %>%
+  arrange(padj)
+
+resP_N0.01$Genes <- rownames(resP_N0.01)
+resP_N0.01 <- resP_N0.01 %>%
+  arrange(padj)
+#Create directory to save Histogram
+res.dir <- "Plots"
+plot.dir <- file.path(res.dir, "Histogram", "P_N")
+dir.create(plot.dir, recursive = T)
+
+#create histogram of p-value
+#Check the p-value histogram distribution
+ggplot(resP_N,aes(x=pvalue)) +
+  geom_histogram(color = "brown", fill="white", binwidth=0.01)+
+  labs(title = "Histogram of P-value Distribution") +
+  theme(plot.title = element_text(hjust = 0.5, size = 14))
+
+ggsave(file.path(plot.dir, "P_N Pvalue distribution.tiff"), width = 8, height = 5, dpi = 600)
+
+
+## contrasts btwn "HP_positive vs HP_negative" at diff. adj. pvalues
+#Extract differentially expressed genes with padj < 0.05 and Log2FC <= -0.4 / >=0.4
+deg_0.05P_N <- subset(resP_N0.05, padj<0.05 & abs(log2FoldChange) >=0.4)%>%
+  arrange(padj)
+write.table(deg_0.05P_N, file = "Results/P_N/degP_N_0.05.csv", row.names = TRUE, sep = ",")
+
+#Extract differentially expressed genes with padj < 0.01 and Log2FC <= -0.4 / >=0.4
+deg_0.01P_N <- subset(resP_N0.01, padj<0.01 & abs(log2FoldChange) >=0.4)%>%
+  arrange(padj)
+
+write.table(deg_0.01P_N, file = "Results/P_N/degP_N_0.01.csv", row.names = TRUE, sep = ",")
+
+```
+
+# Step 7: Compare "Patients vs HP_positive" and make histogarm of p-values
+```{r}
+#contrasts btwn Patients and HP_positive
+
+resPt_P <- results(ddseq2, contrast = c("Group","Patients","HP_positive"),  alpha = 0.1)
+summary(resPt_P)
+
+resPt_P0.1 <- resPt_P[which(resPt_P$padj < 0.1),]
+summary(resPt_P0.1)
+
+resPt_P0.05 <- resPt_P[which(resPt_P$padj < 0.05),]
+summary(resPt_P0.05)
+
+resPt_P0.01 <- resPt_P[which(resPt_P$padj < 0.01),]        
+summary(resPt_P0.01)
+
+#convert results(according to alpha) to a dataframe
+resPt_P0.1 <- as.data.frame (resPt_P0.1) #Print dataframe
+resPt_P0.1
+
+resPt_P0.05 <- as.data.frame(resPt_P0.05) #Print dataframe
+resPt_P0.05
+
+resPt_P0.01 <- as.data.frame(resPt_P0.01) #Print dataframe
+resPt_P0.01
+
+
+#Convert row names to column
+resPt_P0.1$Genes <- rownames(resPt_P0.1)
+resPt_P0.1 <- resPt_P0.1 %>%
+  arrange(padj)
+
+resPt_P0.05$Genes <- rownames(resPt_P0.05)
+resPt_P0.05 <- resPt_P0.05 %>%
+  arrange(padj)
+
+resPt_P0.01$Genes <- rownames(resPt_P0.01)
+resPt_P0.01 <- resPt_P0.01 %>%
+  arrange(padj)
+
+
+#Create directory to save Histogram
+res.dir <- "Plots"
+plot.dir <- file.path(res.dir, "Histogram", "Pt_P")
+dir.create(plot.dir, recursive = T)
+
+#create histogram of p-value
+#Check the p-value histogram distribution
+ggplot(resPt_P,aes(x=pvalue)) +
+  geom_histogram(color = "brown", fill="white", binwidth=0.01)+
+  labs(title = "Histogram of P-value Distribution") +
+  theme(plot.title = element_text(hjust = 0.5, size = 14))
+
+ggsave(file.path(plot.dir, "Pt_P Pvalue distribution.svg"), width = 8, height = 5, dpi = 600)
+
+```
+
+## Step 7.1 : Explore results for "Patients vs HP_positive"
+```{r}
+
+##Create directory to save MA plots
+res.dir <- "Plots"
+plot.dir <- file.path(res.dir, "MA Plots", "Pt_P")
+dir.create(plot.dir, recursive = T)
+
+
+library(ggpubr)
+ggmaplot(resPt_P0.1, main = expression("Patients vs HP_positive"),
+         fdr = 0.05,fc =1, size = 0.5,
+         palette = c("darkred", "blue", "darkgray"),
+         genenames = as.vector(resPt_P0.1$Genes),
+         legend = "top", top = 20,
+         font.label = c("bold", 9),
+         font.legend = "bold",
+         font.main = "bold",
+         select.top.method = c("fc"),
+         ggtheme = ggplot2::theme_minimal()
+)
+
+
+ggsave(file.path(plot.dir, "Deg_Pt_P0.05_maplot.svg"), width = 8, height = 5, dpi = 600)
+
+
+ggmaplot(resPt_P0.1, main = expression("Patients vs HP_positive"),
+         fdr = 0.01,fc =1, size = 0.5,
+         palette = c("darkred", "blue", "darkgray"),
+         genenames = as.vector(resPt_P0.1$Genes),
+         legend = "top", top = 20,
+         font.label = c("bold", 9),
+         font.legend = "bold",
+         font.main = "bold",
+         select.top.method = c("fc"),
+         ggtheme = ggplot2::theme_minimal()
+)
+
+ggsave(file.path(plot.dir, "Deg_Pt_P0.01_maplot.svg"), width = 8, height = 5, dpi = 600)
+
+
+##DEG extraction
+#Extract differentially expressed genes with padj < 0.05 and Log2FC <= -1 / >=1
+deg_0.05Pt_P <- subset(resPt_P0.05, padj<0.05 & abs(log2FoldChange) >=1)%>%
+  arrange(padj)
+write.table(deg_0.05Pt_P, file = "Results/Pt_P/degPt_P_0.05.csv", row.names = TRUE, sep = ",")
+
+#Extract differentially expressed genes with padj < 0.05 and Log2FC <= -0.5 / >=0.5
+deg_0.05Pt_P_fc_0.5 <- subset(resPt_P0.05, padj<0.05 & abs(log2FoldChange) >=0.5)%>%
+  arrange(padj)
+write.table(deg_0.05Pt_P_fc_0.5, file = "Results/Pt_P/deg_0.05Pt_P_fc_0.5.csv", row.names = TRUE, sep = ",")
+
+#Extract differentially expressed genes with padj < 0.01 and Log2FC <= -1 / >=1
+deg_0.01Pt_P <- subset(resPt_P0.01, padj<0.01 & abs(log2FoldChange) >=1)%>%
+  arrange(padj)
+write.table(deg_0.01Pt_P, file = "Results/Pt_P/degPt_P_0.01.csv", row.names = TRUE, sep = ",")
+
+#Extract differentially expressed genes with padj < 0.01 and Log2FC <= -0.5 / >=0.5
+deg_0.01Pt_P_fc_0.5 <- subset(resPt_P0.01, padj<0.01 & abs(log2FoldChange) >=0.5)%>%
+  arrange(padj)
+write.table(deg_0.01Pt_P_fc_0.5, file = "Results/Pt_P/deg_0.01Pt_P_fc_0.5.csv", row.names = TRUE, sep = ",")
+
+#Extract differentially expressed genes with padj < 0.005 and Log2FC <= -1 / >=1
+deg_0.005Pt_P <- subset(resPt_P0.05, padj<0.005 & abs(log2FoldChange) >=1)%>%
+  arrange(padj)
+write.table(deg_0.005Pt_P, file = "Results/Pt_P/degPt_P_0.005.csv", row.names = TRUE, sep = ",")
+
+#### End ####
+```
+
+# Step 8: Volcano plots
+```{r}
+
+# 8.1: Volcano Plot Patients vs HP-negative
+
+library(ggrepel)
+res.dir <- "Plots"
+plot.dir <- file.path(res.dir, "Volcano Plots", "Pt_N")
+dir.create(plot.dir, recursive = T)
+
+diffgen_Pt_N <- resPt_N0.1
+diffgen_Pt_N$diffexpressed <- "NO"
+diffgen_Pt_N$diffexpressed[diffgen_Pt_N$log2FoldChange > 1 & diffgen_Pt_N$padj < 0.05] <- "UP"
+diffgen_Pt_N$diffexpressed[diffgen_Pt_N$log2FoldChange < -1  & diffgen_Pt_N$padj < 0.05] <- "DOWN"
+
+#diffgen_Pt_N$delabel<-NA 
+
+#at padj 0.05
+EnhancedVolcano(diffgen_Pt_N, x = "log2FoldChange" ,y = "pvalue" , lab = diffgen_Pt_N$Genes,labSize = 0, 
+                pointSize = 2, subtitle = bquote(italic(Gastritis_vs_HP-negative)),pCutoff = 5e-02, 
+                FCcutoff = 1, pCutoffCol = "padj",
+                xlim = c(-2,3), ylim= c(0,25), ylab = bquote(~-Log[10] ~ italic(Padj)), 
+                subtitleLabSize = 18, axisLabSize = 16,
+                legendLabels = c("Non Sig. (padj > 0.05)", expression(Log[2] ~ FC), "Sig. (padj < 0.05)", 
+                                 expression(Sig. ~ padj ~ and ~ log[2] ~ FC > 1)),
+                legendPosition = "right", legendLabSize = 12, legendIconSize = 4, title = NULL)
+                
+
+ggsave(file.path(plot.dir, "deg_0.05Pt_N.tiff"), width = 8, height = 6, dpi = 300)
+
+#at padj 0.01
+EnhancedVolcano(diffgen_Pt_N, x = "log2FoldChange",y = "pvalue", lab = diffgen_Pt_N$Genes, labSize = 3.5, 
+                pointSize = 2, subtitle = bquote(italic(Patients_vs_HP-neg)),pCutoff = 1e-02, FCcutoff = 1,
+                pCutoffCol = "padj",
+                xlim = c(-2,2), ylim= c(0,25), ylab = bquote(~-Log[10] ~ italic(Padj)), 
+            legendLabels = c("Non Sig. (padj > 0.01)", expression(Non ~ Sig. ~ Log[2] ~ FC > 1), 
+                             "Sig.  (padj < 0.01)", expression(Sig. ~ padj ~ and ~ log[2] ~ FC > 1)),
+            legendPosition = "right", legendLabSize = 9, legendIconSize = 4, title = NULL)
+
+ggsave(file.path(plot.dir, "deg_0.01Pt_N.svg"), width = 8, height = 6, dpi = 300)
+
+#### End ####
+
+
+# 8.2: Volcano Plot HP-pos vs HP-neg  
+res.dir <- "Plots"
+plot.dir <- file.path(res.dir, "Volcano Plots","P_N")
+dir.create(plot.dir, recursive = T)  
+
+diffgen_P_N <- resP_N0.1
+diffgen_P_N$diffexpressed <- "NO"
+diffgen_P_N$diffexpressed[diffgen_P_N$log2FoldChange > 1 & diffgen_P_N$padj < 0.05] <- "UP"
+diffgen_P_N$diffexpressed[diffgen_P_N$log2FoldChange < -1  & diffgen_P_N$padj < 0.05] <- "DOWN"
+  
+#at padj 0.05
+EnhancedVolcano(diffgen_P_N, x = "log2FoldChange",y = "pvalue", lab = diffgen_P_N$Genes, 
+              labSize = 0, pointSize = 3, subtitle = bquote(italic("HP-positive_vs_HP-negative")),
+              pCutoff = 5e-02, FCcutoff = 0.5, pCutoffCol = "padj", subtitleLabSize = 18, axisLabSize = 16,
+              xlim = c(-2,2), ylim= c(0,6), ylab = bquote(~-Log[10] ~ italic(Padj)),
+              #legendPosition = "none", title = NULL),
+              legendLabels = c("Non Sig. (padj > 0.05)", expression(Non ~ Sig. ~ Log[2] ~ FC > 1), 
+                               "Sig.(padj < 0.05, log2FoldChange > 1 )", 
+                               expression(Sig. ~ padj ~ and ~ log[2] ~ FC > 1)),
+              legendPosition = "right", legendLabSize = 10, legendIconSize = 4, title = NULL)
+
+ggsave(file.path(plot.dir, "deg_0.05P_N.tiff"), width = 6, height = 7, dpi = 300) 
+  
+#at padj 0.01
+EnhancedVolcano(diffgen_P_N, x = "log2FoldChange",y = "pvalue", lab = diffgen_P_N$Genes, labSize = 3.5, 
+                pointSize = 2, subtitle = bquote(italic("HP_pos vs HP-neg")),pCutoff = 1e-02, FCcutoff = 1,
+                pCutoffCol = "padj",
+                xlim = c(-2,2), ylim= c(0,6), ylab = bquote(~-Log[10] ~ italic(Padj)), 
+                legendLabels = c("Non Sig. (padj > 0.01)", expression(Non ~ Sig. ~ Log[2] ~ FC > 1), 
+                                 "Sig.  (padj < 0.01)", expression(Sig. ~ padj ~ and ~ log[2] ~ FC > 1)),
+                legendPosition = "right", legendLabSize = 9, legendIconSize = 4, title = NULL)
+
+ggsave(file.path(plot.dir, "deg_0.01P_N.tiff"), width = 8, height = 6, dpi = 300)
+
+#### End ####
+
+
+
+# 8.3: Volcano Plot Patients vs HP-pos
+
+res.dir <- "Plots"
+plot.dir <- file.path(res.dir, "Volcano Plots", "Pt_P")
+dir.create(plot.dir, recursive = T)
+
+diffgen_Pt_P <- resPt_P0.1
+diffgen_Pt_P$diffexpressed <- "NO"
+diffgen_Pt_P$diffexpressed[diffgen_Pt_P$log2FoldChange > 1 & diffgen_Pt_P$padj < 0.05] <- "UP"
+diffgen_Pt_P$diffexpressed[diffgen_Pt_P$log2FoldChange < -1  & diffgen_Pt_P$padj < 0.05] <- "DOWN"
+
+#at padj 0.05
+EnhancedVolcano(diffgen_Pt_P, x = "log2FoldChange",y = "pvalue", lab = diffgen_Pt_P$Genes, labSize = 0, 
+                pointSize = 2, subtitle = bquote(italic(Gastritis_vs_HP-positive)),pCutoff = 5e-02, 
+                FCcutoff = 1, pCutoffCol = "padj", subtitleLabSize = 18, axisLabSize = 16,
+                xlim = c(-2,3), ylim= c(0,22), ylab = bquote(~-Log[10] ~ italic(Padj)), 
+                legendLabels = c("Non Sig. (padj > 0.05)", expression(Non ~ Sig. ~ Log[2] ~ FC > 1), 
+                                 "Sig. (padj < 0.05)", expression(Sig. ~ padj ~ and ~ log[2] ~ FC > 1)),
+                legendPosition = "right", legendLabSize = 12, legendIconSize = 4, title = NULL)
+
+ggsave(file.path(plot.dir, "deg_0.05Pt_P.tiff"), width = 8, height = 6, dpi = 300)
+
+#at padj 0.01
+EnhancedVolcano(diffgen_Pt_P, x = "log2FoldChange",y = "padj", lab = diffgen_Pt_P$Genes, labSize = 3, 
+                pointSize = 2, subtitle = bquote(italic(Patients_vs_HP-pos)),pCutoff = 1e-02, 
+                FCcutoff = 1, pCutoffCol = "padj", subtitleLabSize = 18, axisLabSize = 16,
+                xlim = c(-2,2), ylim= c(0,22), ylab = bquote(~-Log[10] ~ italic(Padj)), 
+                legendLabels = c("Non Sig. (padj > 0.01)", expression(Non ~ Sig. ~ Log[2] ~ FC > 1),
+                                "Sig.  (padj < 0.01)", expression(Sig. ~ padj ~ and ~ log[2] ~ FC > 1)),
+                legendPosition = "right", legendLabSize = 10, legendIconSize = 4, title = NULL)
+
+ggsave(file.path(plot.dir, "deg_0.01Pt_P.svg"), width = 8, height = 5, dpi = 300)
+
+help("EnhancedVolcano")
+
+#### End ####
+
+```
+
+# Step 9: PCA Plot 
+```{r}
+res.dir <- "Plots"
+  plot.dir <- file.path(res.dir, "PCA Plots")
+  dir.create(plot.dir, recursive = T)
+  
+#First estimate the size factors of the ddseq object
+ddseq_est <- estimateSizeFactors(ddseq1)
+
+#Use vst() to create transformed values to generate a pca plot, rlog() takes much time to transform the deseq object
+
+vsd <- varianceStabilizingTransformation(ddseq_est)
+assay_vsd <- assay(vsd)
+
+## Exclude "Group" levels like "Unclassified" 
+ddseq1_subset <- ddseq1[, colData(ddseq1)$Group != "Unclassified"]
+colData(ddseq1_subset)$Group <- droplevels(colData(ddseq1_subset)$Group) #drop unused factor levels
+  
+ddseq_est1 <- estimateSizeFactors(ddseq1_subset) #estimate the size factors of the ddseq object
+  
+## Use vst() to create transformed values 
+vsd1 <- varianceStabilizingTransformation(ddseq_est1)
+assay_vsd1 <- assay(vsd1)
+
+```
+
+# Step 10: Normal PCA Plot without Batch Effect Removal
+```{r}
+
+  vsd_nbc <- vsd     # vsd for no batch correction
+
+  pca_plot <- plotPCA(vsd_nbc,intgroup=c("Group"), ntop = 1000)
+  pca_plot
+
+  ggsave(file.path(plot.dir, "PCA-plot-nbc-1000.tiff"), width = 8, height = 10, dpi = 600)
+  
+  ## without Group Level "Unclassified"
+  vsd_nbc1 <-vsd1   # vsd1 for no batch correction
+  
+  pca_plot1 <- plotPCA(vsd_nbc1,intgroup=c("Group"), ntop = 1000)
+  pca_plot1
+  
+  ggsave(file.path(plot.dir, "PCA-plot1-nbc-1000.svg"), width = 8, height = 10, dpi = 600)
+  
+#### End ####
+  
+
+```
+
+# Step 11: Remove batch effect with limma and PCA plot
+```{r}
+
+vsd_bc <- vsd    # vsd for batch correction
+
+design.mat <- model.matrix(~ Group, rna_coldata)
+
+assay(vsd_bc) <- limma::removeBatchEffect(assay(vsd_bc),
+                                           batch=vsd_bc$Batch,
+                                           #batch2=vsd_bc$Date,
+                                           design = design.mat)
+
+#class(assay(counts_batch_corrected))
+#counts_batch_corrected_df <- as.data.frame(counts_batch_corrected)
+   
+pca_plot <- plotPCA(vsd_bc,intgroup=c("Group"), ntop = 1000, returnData = FALSE, pcsToUse = 1:2)+
+            labs(title = "PCA plot")+
+            theme(plot.title = element_text(hjust = 0.5, size = 14))    
+pca_plot
+      
+ggsave(file.path(plot.dir, "PCA-plot_1000.tiff"), width = 8, height = 10, dpi = 600)
+
+## without Group Level "Unclassified"
+vsd_bc1 <- vsd1 # assign to another object to avoid losing metatdata
+  
+rna_coldata_no_unc <- rna_coldata[rna_coldata$Group != "Unclassified", ]
+  
+design.mat1 <- model.matrix(~ Group, rna_coldata_no_unc)
+  
+assay(vsd_bc1) <- limma::removeBatchEffect(assay(vsd_bc1),
+                                            batch=vsd_bc1$Batch,
+                                            #batch2=vsd_bc$Date,
+                                            design = design.mat1)
+  
+assay_vsd_bc1 <- assay(vsd_bc1)
+anyNA(assay_vsd_bc1)
+  
+  
+pca_plot1 <- plotPCA(vsd_bc1,intgroup=c("Group"), ntop = 1000, returnData = FALSE, pcsToUse = 1:2)+
+            labs(title = "PCA plot")+
+            theme(plot.title = element_text(hjust = 0.5, size = 14))    
+pca_plot1
+  
+ggsave(file.path(plot.dir, "PCA-plot1_1000.svg"), width = 8, height = 10, dpi = 600)
+
+```
+
+# Step 12: Plot Dispersion Estimate
+```{r}
+##plot dispersion estimates. Use Analyzed Deseq Object, "ddseq2" 
+  res.dir <- "Plots"
+  plot.dir <- file.path(res.dir, "DispEsts")
+  dir.create(plot.dir, recursive = T)
+   
+  pdf(file.path(plot.dir, "DispEsts.pdf"),width = 8, height = 6)
+  plotDispEsts(ddseq2)
+  dev.off()
+  
+## without Group Level "Unclassified"
+  
+  ddseq3 <- DESeq(ddseq1_subset, test ='Wald', sfType = 'poscount') 
+  
+  pdf(file.path(plot.dir, "DispEsts1.pdf"),width = 8, height = 6)
+  plotDispEsts(ddseq3)
+  dev.off()
+
+library(reshape2)
+  
+  mcols <- as.data.frame(mcols(ddseq2))
+
+  DispEsts <- as.data.frame(mcols(ddseq2)) %>% 
+             select(baseMean, dispGeneEst,dispersion, dispFit) %>% #rearrange dispFit to appear in front of the chart
+             melt(id.vars="baseMean") %>% 
+             filter(baseMean>0) %>% 
+             ggplot(aes(x=baseMean, y=value, colour=variable)) + 
+             geom_point(size=1) +
+             scale_x_log10(breaks = c(1, 100, 10000, 1e+06)) + 
+             scale_y_log10(breaks = c(100, 1, 0.01, 0.0001, 0.000001)) +
+             theme_bw() + 
+             ylab("Dispersion") + 
+             xlab("BaseMean") +
+             scale_colour_manual(
+             values=c("Black","#377eb8","#e41a1c"), 
+             breaks=c("dispGeneEst","dispersion", "dispFit"), 
+             labels=c("Estimate","Final","Fit"),
+             name="") +
+             guides(colour = guide_legend(override.aes = list(size=2)))
+
+DispEsts
+
+ggsave(file.path(plot.dir, "PC_DispEsts.tiff"), width = 10, height = 7, dpi = 600)
+
+## Note that you can replace ddseq2 with ddseq3
+
+```
+
+# Step 13: Diagnose outliers with cooks distance
+```{r}
+
+cooks <- log10(assays(ddseq2)[["cooks"]])
+cooks_df <- as.data.frame(cooks)
+cooks_df$Genes <- rownames(cooks_df)
+
+pivot_cooks <- pivot_longer(cooks_df,-Genes, names_to="Sample_ID",
+                            values_to="gene")
+
+  ggplot(pivot_cooks, aes(x=Sample_ID, y=gene)) +
+  geom_boxplot(outliers = FALSE, staplewidth = 1)+
+  coord_cartesian(ylim = c(-10,0)) +
+  ylab("log10 cooks") +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 1, hjust = 1, 
+                      size = 8, face = "bold")) +
+  theme(plot.margin = unit(c(1,1,1,1), "cm", margin(t = 10, r = 10, b = 20, l = 10, unit = "pt")), 
+        panel.border = element_rect(colour = "black", fill=NA, linewidth=0.5),
+        panel.background = element_blank(), axis.line = element_line(colour = "black"),
+        margin(t = 10, r = 10, b = 20, l = 10, unit = "pt")) 
+
+ ggsave(file.path(plot.dir, "Normalised_count.svg"), width = 30, height = 5, dpi = 600)
+
+```
+#### End ####
