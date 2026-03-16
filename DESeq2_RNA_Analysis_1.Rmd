@@ -156,7 +156,7 @@ median(rna_count_row_sum_df$rna_count_row_sum, na.rm = TRUE) #check median of ro
 
 ```
 
-#Step 3: Construct a DESeqdataset object
+# Step 3: Construct a DESeqdataset object
 ## Check if there are any NAs in the count table
 ```{r}
 #sum up NAs
