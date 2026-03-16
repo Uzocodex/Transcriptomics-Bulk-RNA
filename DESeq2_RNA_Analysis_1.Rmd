@@ -265,7 +265,7 @@ ggsave(file.path(plot.dir, "Pt_N Pvalue distribution.tiff"), width = 8, height =
 
 ```
 
-##Step 5.1: Explore results for "Patients vs HP_negative"
+# Step 5.1: Explore results for "Patients vs HP_negative"
 ```{r}
 
 #Create directory to save MA plots
@@ -461,10 +461,10 @@ ggsave(file.path(plot.dir, "Pt_P Pvalue distribution.svg"), width = 8, height = 
 
 ```
 
-## Step 7.1 : Explore results for "Patients vs HP_positive"
+# Step 7.1 : Explore results for "Patients vs HP_positive"
 ```{r}
 
-##Create directory to save MA plots
+#Create directory to save MA plots
 res.dir <- "Plots"
 plot.dir <- file.path(res.dir, "MA Plots", "Pt_P")
 dir.create(plot.dir, recursive = T)
