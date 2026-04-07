@@ -534,7 +534,7 @@ write.table(deg_0.005Pt_P, file = "Results/Pt_P/degPt_P_0.005.csv", row.names = 
 # Step 8: Volcano plots
 ```{r}
 
-# 8.1: Volcano Plot Patients vs HP-negative
+# Step 8.1: Volcano Plot Patients vs HP-negative
 
 library(ggrepel)
 res.dir <- "Plots"
@@ -575,7 +575,7 @@ ggsave(file.path(plot.dir, "deg_0.01Pt_N.svg"), width = 8, height = 6, dpi = 300
 #### End ####
 
 
-# 8.2: Volcano Plot HP-pos vs HP-neg  
+# Step 8.2: Volcano Plot HP-pos vs HP-neg  
 res.dir <- "Plots"
 plot.dir <- file.path(res.dir, "Volcano Plots","P_N")
 dir.create(plot.dir, recursive = T)  
@@ -613,7 +613,7 @@ ggsave(file.path(plot.dir, "deg_0.01P_N.tiff"), width = 8, height = 6, dpi = 300
 
 
 
-# 8.3: Volcano Plot Patients vs HP-pos
+# Step 8.3: Volcano Plot Patients vs HP-pos
 
 res.dir <- "Plots"
 plot.dir <- file.path(res.dir, "Volcano Plots", "Pt_P")
