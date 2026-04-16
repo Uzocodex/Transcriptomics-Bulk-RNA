@@ -2,6 +2,7 @@
 title: "RNA Differential Expression Analysis - Blood RNA from Humans"
 author: "Uzochukwu Gospel Ukachukwu"
 date: "2026-03-15"
+R_version: "4.4.3"
 output: html_document
 ---
 
